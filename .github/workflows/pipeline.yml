@@ -1,0 +1,64 @@
+name: Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Lint HTML
+        run: |
+          npx --yes htmlhint index.html
+
+      - name: Build test image
+        run: |
+          docker build -t local-test-image:latest .
+
+      - name: Smoke test container
+        run: |
+          docker run -d --name smoke-test -p 8080:80 local-test-image:latest
+          sleep 3
+          curl -s http://localhost:8080 | grep "Ведышев Александр Юрьевич"
+          echo "OK"
+          docker rm -f smoke-test
+
+  release:
+    name: release
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set lowercase repository name
+        run: |
+          echo "IMAGE_NAME=ghcr.io/$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
